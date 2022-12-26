@@ -59,9 +59,10 @@ impl IntoIterator for Fields {
 
 impl Display for Fields {
 	fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-		match self.value_only() {
-			true => write!(f, "VALUE {}", &self.0[0]),
-			false => Display::fmt(&Fmt::comma_separated(&self.0), f),
+		if self.value_only() {
+			write!(f, "VALUE {}", &self.0[0])
+		} else {
+			Display::fmt(&Fmt::comma_separated(&self.0), f)
 		}
 	}
 }
