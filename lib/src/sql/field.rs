@@ -222,7 +222,7 @@ fn field_list(i: &str) -> IResult<&str, Fields> {
 fn field_value(i: &str) -> IResult<&str, Fields> {
 	let (i, _) = tag_no_case("VALUE")(i)?;
 	let (i, _) = shouldbespace(i)?;
-	let (i, f) = alt((alias, alone))(i)?;
+	let (i, f) = alone(i)?;
 	Ok((i, Fields(vec![f], true)))
 }
 
