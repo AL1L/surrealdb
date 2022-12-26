@@ -17,7 +17,7 @@ use std::fmt::{self, Display, Formatter, Write};
 use std::ops::Deref;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Hash)]
-pub struct Fields(pub Vec<Field>);
+pub struct Fields(pub Vec<Field>, pub bool);
 
 impl Fields {
 	pub fn all(&self) -> bool {
@@ -36,6 +36,9 @@ impl Fields {
 			},
 			_ => None,
 		}
+	}
+	pub fn value_only(&self) -> bool {
+		self.1 && self.0.len() <= 1 && !self.all()
 	}
 }
 
@@ -56,7 +59,10 @@ impl IntoIterator for Fields {
 
 impl Display for Fields {
 	fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-		Display::fmt(&Fmt::comma_separated(&self.0), f)
+		match self.value_only() {
+			true => write!(f, "VALUE {}", &self.0[0]),
+			false => Display::fmt(&Fmt::comma_separated(&self.0), f),
+		}
 	}
 }
 
@@ -90,7 +96,12 @@ impl Fields {
 							// If arguments, then pass the first value through
 							_ => f.args()[0].compute(ctx, opt, txn, Some(doc)).await?,
 						};
-						out.set(ctx, opt, txn, v.to_idiom().as_ref(), x).await?;
+
+						if self.value_only() {
+							out = x;
+						} else {
+							out.set(ctx, opt, txn, v.to_idiom().as_ref(), x).await?;
+						}
 					}
 					// This expression is a multi-output graph traversal
 					Value::Idiom(v) if v.is_multi_yield() => {
@@ -126,7 +137,11 @@ impl Fields {
 					// This expression is a normal field expression
 					_ => {
 						let x = v.compute(ctx, opt, txn, Some(doc)).await?;
-						out.set(ctx, opt, txn, v.to_idiom().as_ref(), x).await?;
+						if self.value_only() {
+							out = x;
+						} else {
+							out.set(ctx, opt, txn, v.to_idiom().as_ref(), x).await?;
+						}
 					}
 				},
 				Field::Alias(v, i) => match v {
@@ -138,7 +153,11 @@ impl Fields {
 							// If arguments, then pass the first value through
 							_ => f.args()[0].compute(ctx, opt, txn, Some(doc)).await?,
 						};
-						out.set(ctx, opt, txn, v.to_idiom().as_ref(), x).await?;
+						if self.value_only() {
+							out = x;
+						} else {
+							out.set(ctx, opt, txn, v.to_idiom().as_ref(), x).await?;
+						}
 					}
 					// This expression is a multi-output graph traversal
 					Value::Idiom(v) if v.is_multi_yield() => {
@@ -177,7 +196,11 @@ impl Fields {
 					}
 					_ => {
 						let x = v.compute(ctx, opt, txn, Some(doc)).await?;
-						out.set(ctx, opt, txn, i, x).await?;
+						if self.value_only() {
+							out = x;
+						} else {
+							out.set(ctx, opt, txn, i, x).await?;
+						}
 					}
 				},
 			}
@@ -187,8 +210,19 @@ impl Fields {
 }
 
 pub fn fields(i: &str) -> IResult<&str, Fields> {
+	alt((field_value, field_list))(i)
+}
+
+fn field_list(i: &str) -> IResult<&str, Fields> {
 	let (i, v) = separated_list1(commas, field)(i)?;
-	Ok((i, Fields(v)))
+	Ok((i, Fields(v, false)))
+}
+
+fn field_value(i: &str) -> IResult<&str, Fields> {
+	let (i, _) = tag_no_case("VALUE")(i)?;
+	let (i, _) = shouldbespace(i)?;
+	let (i, f) = alt((alias, alone))(i)?;
+	Ok((i, Fields(vec![f], true)))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Hash)]
@@ -276,5 +310,33 @@ mod tests {
 		assert!(res.is_ok());
 		let out = res.unwrap().1;
 		assert_eq!("field AS one, other.field AS two", format!("{}", out));
+	}
+
+	#[test]
+	fn field_value() {
+		let sql = "VALUE field";
+		let res = fields(sql);
+		assert!(res.is_ok());
+		let out = res.unwrap().1;
+		assert_eq!("VALUE field", format!("{}", out));
+	}
+
+	#[test]
+	fn field_value_alias() {
+		let sql = "VALUE field AS one";
+		let res = fields(sql);
+		assert!(res.is_ok());
+		let out = res.unwrap().1;
+		assert_eq!("VALUE field AS one", format!("{}", out));
+	}
+
+	#[test]
+	fn field_value_only_one() {
+		let sql = "VALUE field, other.field";
+		let res = fields(sql);
+		assert!(res.is_ok());
+		let out = res.unwrap().0;
+		// Because of the VALUE, it should stop parsing at the comma
+		assert_eq!(", other.field", out);
 	}
 }
